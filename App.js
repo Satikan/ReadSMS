@@ -1,9 +1,7 @@
 import React, {Component} from 'react';
 import {
-  Alert,
   Platform,
   Button,
-  Clipboard,
   StyleSheet,
   Text,
   View,
@@ -12,28 +10,22 @@ import {
   TouchableOpacity,
   PermissionsAndroid,
 } from 'react-native';
+import BackgroundTimer from "react-native-background-timer";
 import SmsAndroid from 'react-native-get-sms-android';
 import io from 'socket.io-client';
 import axios from 'axios';
-
-const instructions = Platform.select({
-  ios: 'Press Cmd+R to reload,\n' + 'Cmd+D or shake for dev menu',
-  android:
-    'Double tap R on your keyboard to reload,\n' +
-    'Shake or press menu button for dev menu',
-});
 
 export default class App extends Component {
   constructor() {
     super();
     this.state = {
       chatMessage: '',
-      sendTo: '',
-      sendBody: '',
-      minDate: '',
-      maxDate: '',
+      phoneNumber: '',
       smsList: [],
-      chatMessages: []
+      chatMessages: [],
+      _interval: null,
+      second: 0,
+      status: ''
     };
   }
 
@@ -45,13 +37,11 @@ export default class App extends Component {
         }
 
         if (await this.checkPermissions()) {
-          this.listSMS();
+          // this.listSMS();
         }
 
-        this.socket = io('http://192.168.1.33:3000');
-        console.log(this.socket)
+        this.socket = io('https://node-read-sms.herokuapp.com');
         this.socket.on("get sms", msg => {
-          console.log(msg)
           this.setState({chatMessages: [...this.state.chatMessages, msg]});
         })
       } catch (e) {
@@ -61,7 +51,6 @@ export default class App extends Component {
   }
 
   async checkPermissions() {
-    console.log('checking SMS permissions');
     let hasPermissions = false;
     try {
       hasPermissions = await PermissionsAndroid.check(
@@ -81,7 +70,6 @@ export default class App extends Component {
   async requestPermissions() {
     let granted = {};
     try {
-      console.log('requesting SMS permissions');
       granted = await PermissionsAndroid.requestMultiple(
         [
           PermissionsAndroid.PERMISSIONS.READ_SMS,
@@ -95,7 +83,6 @@ export default class App extends Component {
           buttonPositive: 'OK',
         },
       );
-      console.log(granted);
       if (granted === PermissionsAndroid.RESULTS.GRANTED) {
         console.log('You can use SMS features');
       } else {
@@ -106,71 +93,51 @@ export default class App extends Component {
     }
   }
 
-  sendSMS = () => {
-    SmsAndroid.autoSend(
-      this.state.sendTo,
-      this.state.sendBody,
-      (err) => {
-        Alert.alert('Failed to send SMS. Check console');
-        console.log('SMS SEND ERROR', err);
-      },
-      (success) => {
-        Alert.alert('SMS sent successfully');
-      },
-    );
-  };
-
-  submitChatMessage() {
-    this.socket.emit("get sms", this.state.chatMessage);
-    this.setState({chatMessage: ""});
+  onStart = () => {
+    // BackgroundTimer.runBackgroundTimer(() => {
+    //   this.listSMS();
+    // }, 1000);
+    this._interval = BackgroundTimer.setInterval(() => {
+      this.setState({
+        // second: this.state.second + 1,
+        status: 'Start'
+      });
+      this.listSMS();
+    }, 200);
   }
 
-  renderSendSMS = () => {
-    return (
-      <View style={{flex: 1, alignItems: 'flex-start'}}>
-        <Text style={styles.welcome}>Send SMS</Text>
-        <Text>To</Text>
-        <TextInput
-          style={{
-            width: '100%',
-            borderRadius: 20,
-            height: 40,
-            borderColor: 'gray',
-            borderWidth: 1,
-          }}
-          onChangeText={(text) => this.setState({sendTo: text})}
-          value={this.state.sendTo}
-          keyboardType={'numeric'}
+  onStop = () => {
+    this.setState({
+      // second: 0,
+      status: 'Stop'
+    });
+    BackgroundTimer.clearInterval(this._interval);
+  }
+
+  renderStartButton = () => {
+      return (
+        <Button
+          title="Start"
+          onPress={this.onStart}
         />
-        <Text>Message</Text>
-        <TextInput
-          style={{
-            borderRadius: 20,
-            height: 40,
-            borderColor: 'gray',
-            borderWidth: 1,
-          }}
-          onChangeText={(text) => this.setState({sendBody: text})}
-          value={this.state.sendBody}
-        />
-        <Button title="send sms" onPress={() => this.sendSMS()} />
-      </View>
-    );
-  };
+      )
+  }
+
+  renderStopButton = () => {
+      return (
+        <Button
+          title="Stop"
+          onPress={this.onStop}
+          />
+        )
+  }
 
   listSMS = () => {
-    const {minDate, maxDate} = this.state;
+    const {phoneNumber} = this.state;
     var filter = {
       box: 'inbox',
-      address: '+66862765988',
-      // maxCount: 30,
+      address: phoneNumber
     };
-    // if (minDate !== "") {
-    //   filter.minDate = minDate
-    // }
-    // if (maxDate !== "") {
-    //   filter.maxDate = maxDate
-    // }
 
     SmsAndroid.list(
       JSON.stringify(filter),
@@ -179,66 +146,31 @@ export default class App extends Component {
       },
       (count, smsList) => {
         var arr = JSON.parse(smsList);
-        console.log(arr);
-        this.setState({smsList: arr});
+        if(arr.length !== 0) {
+          if(this.state.smsList.length === 0){
+            this.setState({smsList: arr});
+            this.socket.emit("get sms", arr);
+          }
+          else {
+            if(this.state.smsList[0].address !== phoneNumber){
+              this.setState({smsList: arr});
+              this.socket.emit("get sms", arr);
+            }
+            else{
+              if(this.state.smsList.length !== arr.length) {
+                this.setState({smsList: arr});
+                this.socket.emit("get sms", arr);
+              }
+            }
+          }
+        }
       },
-    );
-  };
-
-  pasteDateFilter = (str) => {
-    switch (str) {
-      case 'minDate':
-      case 'maxDate':
-        return async () => {
-          const content = await Clipboard.getString();
-          this.setState({[str]: content});
-        };
-        break;
-      default:
-    }
-  };
-
-  renderDateFilter = (str) => {
-    switch (str) {
-      case 'minDate':
-      case 'maxDate':
-        return (
-          <View>
-            <Text>{str} (UNIX timestamp in ms)</Text>
-            <View style={{flexDirection: 'row'}}>
-              <TextInput
-                style={{
-                  flex: 1,
-                  borderRadius: 20,
-                  height: 40,
-                  borderColor: 'gray',
-                  borderWidth: 1,
-                }}
-                onChangeText={(text) => this.setState({[str]: text})}
-                value={this.state[str]}
-                keyboardType={'numeric'}
-              />
-              <Button title="paste" onPress={this.pasteDateFilter(str)} />
-            </View>
-          </View>
-        );
-        break;
-      default:
-    }
-  };
-
-  renderFilters = () => {
-    return (
-      <View>
-        {this.renderDateFilter('minDate')}
-        {this.renderDateFilter('maxDate')}
-      </View>
     );
   };
 
   getPayload() {
     console.log("Get payload")
-    axios.get('https://jsonplaceholder.typicode.com/todos').then(res => {
+    axios.get('https://node-read-sms.herokuapp.com/api/movies').then(res => {
       console.log(res)
     }).catch(error => {
       // console.log(error)
@@ -255,10 +187,6 @@ export default class App extends Component {
           <Text>Id: {sms._id}</Text>
           <View style={{flexDirection: 'row', alignItems: 'center'}}>
             <Text>Date timestamp: {sms.date}</Text>
-            <Button
-              title="copy date"
-              onPress={() => Clipboard.setString(sms.date.toString())}
-            />
           </View>
           <Text>Date (readable): {new Date(sms.date).toString()}</Text>
         </View>
@@ -270,11 +198,30 @@ export default class App extends Component {
     return (
       <View style={{flex: 2, alignItems: 'flex-start'}}>
         <View style={{flexDirection: 'row', alignItems: 'center'}}>
-          {/* <Text style={styles.welcome}>Latest Messages</Text> */}
-          <Button title="Read SMS" onPress={this.listSMS} />
-          <Button title="Get Payload" onPress={this.getPayload} />
+          <Text>Phone number : </Text>
+          <TextInput
+            style={{ height: 40, width: 200, borderWidth: 2, marginLeft: 10 }}
+            autoCorrect={false}
+            value={this.state.phoneNumber}
+            onChangeText={phoneNumber => {
+              this.setState({ phoneNumber });
+            }}
+          />
         </View>
-        {/* {this.renderFilters()} */}
+        <View>
+          <Text style={{marginTop: 15}}>
+            Status : {this.state.status}
+          </Text>
+        </View>
+        <View style={{flexDirection: 'row', alignItems: 'center', marginTop: 20}}>
+          {/* <Button title="Read SMS" onPress={this.listSMS} /> */}
+          {/* <Button title="Get Payload" onPress={this.getPayload} /> */}
+          
+          <View style={styles.buttonWrapper}>
+              {this.renderStartButton()}
+              {this.renderStopButton()}
+          </View>
+        </View>
         <ScrollView>{this.renderShowSMS()}</ScrollView>
       </View>
     );
@@ -295,18 +242,7 @@ export default class App extends Component {
 
     return (
       <View style={styles.container}>
-        {/* {this.renderSendSMS()} */}
         {this.renderLatestMessages()}
-        <TextInput
-          style={{height: 40, width: 300, borderWidth: 2}}
-          autoCorrect={false}
-          value={this.state.chatMessage}
-          onSubmitEditing={() => this.submitChatMessage()}
-          onChangeText={(chatMessage) => {
-            this.setState({chatMessage});
-          }}
-        />
-        {chatMessages}
       </View>
     );
   }
@@ -319,5 +255,10 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'flex-start',
     backgroundColor: '#F5FCFF',
+  },
+  buttonWrapper: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-around',
   },
 });
